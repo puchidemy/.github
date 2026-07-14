@@ -1,3 +1,5 @@
+![System Design](assets/system-design.png)
+
 # Puchi
 
 **Puchi** — nền tảng web học tiếng Việt.
