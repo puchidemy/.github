@@ -35,7 +35,7 @@ User ──► Cloudflare CDN ──► Next.js PWA ──► Envoy Gateway ─�
 | Runtime | Bun (install) + Node.js (build) |
 | i18n | next-intl (9 ngôn ngữ) |
 | Animation | Motion + Rive |
-| Auth | Custom AuthProvider — gọi trực tiếp auth-service |
+| Auth | **Limen** — `limen-auth/react` + bearerPlugin |
 | CI/CD | GitHub Actions → GHCR |
 
 ### Backend
@@ -44,10 +44,10 @@ User ──► Cloudflare CDN ──► Next.js PWA ──► Envoy Gateway ─�
 |------------|-----------|
 | Ngôn ngữ | Go 1.26 |
 | Framework | Kratos v3 (HTTP/gRPC hybrid, Protobuf-first, Wire DI) |
-| Auth | Auth-service tự xây dựng (JWT RS256 + opaque refresh token) |
-| API Gateway | Envoy Gateway (CORS-only, JWT passthrough) |
+| Auth | Auth-service (**Limen**) — opaque session + Bearer |
+| API Gateway | Envoy Gateway (CORS-only, Bearer passthrough) |
 | Database | PostgreSQL 18 (CloudNativePG) |
-| Cache | Valkey (cache + rate limit + token blacklist) |
+| Cache | Valkey |
 | Message Queue | NATS (event-driven) |
 | Object Storage | Garage (S3 API, self-host) |
 | Migration | goose |
@@ -64,33 +64,23 @@ K3s v1.35.5, ArgoCD GitOps, Traefik ingress, Cloudflare Tunnel.
 
 ---
 
-## Authentication (Self-hosted Auth Service)
+## Authentication (Limen)
 
-Auth tự xây dựng thay thế hoàn toàn Zitadel/Supertokens.
+Auth qua [Limen](https://limenauth.dev/) — thay thế JWT/JWKS custom và Zitadel/Supertokens.
 
 ```
-Browser ──► puchi.io.vn (Next.js)
+Browser ──► puchi.io.vn (Next.js + limen-auth)
  │
- ├─► /api/auth/* → api.puchi.io.vn/auth → auth-service:8080
- │   ├── POST /login          (email+password → Argon2id)
- │   ├── POST /register       (Argon2id → user)
- │   ├── POST /refresh        (rotate opaque token)
- │   ├── POST /logout         (revoke session)
- │   ├── GET  /social/google  (OAuth2 direct)
- │   ├── GET  /social/facebook
- │   ├── GET  /social/tiktok
- │   ├── POST /magic-link/send   (passwordless)
- │   ├── POST /mfa/totp/enroll   (TOTP authenticator app)
- │   ├── GET  /sessions          (device management)
- │   └── POST /admin/roles       (RBAC)
+ ├─► api.puchi.io.vn/auth/* → auth-service:8000 (Limen)
+ │   ├── credential-password
+ │   ├── oauth-google / oauth-facebook / oauth-tiktok
+ │   └── session cookie + opaque Bearer
  │
- ├─► api.puchi.io.vn/{core,user,...} → Go services
- │   └── JWT verify via pkg/auth/ (JWKS local, 15min cache)
- │
- └── Double token: JWT access (RS256, 15min) + opaque refresh (SHA-256, 30d rotation)
+ └─► api.puchi.io.vn/{core,user,...} → Go services
+     └── pkg/auth introspect → GET /internal/session
 ```
 
-Auth methods: Email/Password + Google + Facebook + TikTok + Magic Link + TOTP MFA.
+Auth methods: Email/Password + Google + Facebook + TikTok.
 
 ---
 
@@ -98,57 +88,37 @@ Auth methods: Email/Password + Google + Facebook + TikTok + Magic Link + TOTP MF
 
 | Service | Module | Trách nhiệm |
 |---------|--------|-------------|
-| **auth** | `app/auth/` | Identity: login, register, OAuth2, session, MFA, RBAC |
-| **core** | `app/core/` | Auth + User + Game (Phase 1 monolith) |
-| **content** | `app/content/` | Courses, units, lessons, vocabulary |
-| **grading** | `app/grading/` | Chấm dictation, listening; lịch sử làm bài |
-| **user** | `app/user/` | Profile, avatar, settings, progress |
-| **game** | `app/game/` | XP, level, leaderboard, quests, shop |
-| **media** | `app/media/` | Upload, resize ảnh, transcode audio |
-| **notification** | `app/notification/` | Push notification, email |
+| **auth** | `app/auth/` | Identity (Limen): credential, OAuth, session |
+| **core** | `app/core/` | Profile, onboarding, game stats |
+| **content** | `app/content/` | Courses, units, lessons |
+| **grading** | `app/grading/` | Dictation / listening grading |
+| **user** | `app/user/` | Social features |
+| **game** | `app/game/` | XP, leaderboard |
+| **media** | `app/media/` | Upload (Garage S3) |
+| **notification** | `app/notification/` | Push, email |
 
----
-
-## Deployed Infrastructure
-
-| Service | Chart | Namespace |
-|---------|-------|-----------|
-| PostgreSQL 18 | CloudNativePG CRD | puchi-db |
-| Auth Service | custom Helm | puchi-backend |
-| Envoy Gateway | envoy/gateway-helm | envoy-gateway-system |
-| NATS | nats/helm | platform (shared) |
-| Garage | custom Helm | platform (shared) |
-| Valkey | bitnami/valkey | platform (shared) |
-
----
-
-## Event-driven (NATS)
+### Event-driven (NATS)
 
 ```
 Auth       ──► "auth.user.created"   ──► Core (sync profile)
-Grading    ──► "lesson.completed"    ──► Game (+XP), User (progress), Notification (push)
-Game       ──► "level.up"            ──► User (unlock), Content (gợi ý bài), Notification (push)
+Grading    ──► "lesson.completed"    ──► Core / Notification
+…
 ```
 
-Subject prefix: `puchi.*`
+---
+
+## Roadmap (tóm tắt)
+
+| Phase | Status | Nội dung |
+|-------|--------|----------|
+| 0 | Done | Auth (Limen) + core foundation |
+| 1+ | In progress | Content, grading, media, social |
 
 ---
 
-## Lộ trình triển khai
+## Domains
 
-| Phase | Thời gian | Mô tả |
-|-------|-----------|-------|
-| 0 | Đã hoàn thành | Auth service tự xây dựng (thay Zitadel/Supertokens) |
-| 1 | 1-2 tháng | Monolith modular: core (auth+user+game) + content + media |
-| 2 | tháng 3-4 | Tách grading service, NATS event-driven |
-| 3 | tháng 5-6 | Tách game + user + notification, Istio service mesh |
-
----
-
-## Tài liệu tham khảo
-
-- [Kratos](https://go-kratos.dev/) — Go microservice framework
-- [Envoy Gateway](https://gateway.envoyproxy.io/) — API Gateway
-- [NATS](https://nats.io/) — Message broker
-- [Garage](https://garagehq.deuxfleurs.fr/) — S3-compatible object storage
-- [CloudNativePG](https://cloudnative-pg.io/) — PostgreSQL operator
+| Domain | Service |
+|--------|---------|
+| `puchi.io.vn` | Frontend |
+| `api.puchi.io.vn` | API Gateway → Go services + auth |
