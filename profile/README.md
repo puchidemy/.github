@@ -13,7 +13,7 @@ Kiến trúc: **Next.js PWA (frontend) + Go microservices (backend)**, self-host
 | Repo | Mô tả |
 |------|-------|
 | [puchi-frontend](https://github.com/puchidemy/puchi-frontend) | Next.js 16 PWA (React 19, Tailwind v4, Shadcn UI, Bun) |
-| [puchi-backend](https://github.com/puchidemy/puchi-backend) | Go monorepo — 8 services với Kratos v3 |
+| [puchi-backend](https://github.com/puchidemy/puchi-backend) | Go monorepo — 5 services với Kratos v3 |
 | [puchi-infra](https://github.com/puchidemy/puchi-infra) | Infrastructure as Code — ArgoCD GitOps trên K3s |
 
 ---
@@ -21,8 +21,8 @@ Kiến trúc: **Next.js PWA (frontend) + Go microservices (backend)**, self-host
 ## Kiến trúc
 
 ```
-User ──► Cloudflare CDN ──► Next.js PWA ──► Envoy Gateway ──► Go Services ──► PostgreSQL / NATS / Garage
-(puchi.io.vn)                                  (api.puchi.io.vn)   (Kratos v3)    (K3s cluster)
+User ──► Cloudflare CDN ──► Next.js PWA ──► Envoy Gateway ──► Go Services ──► PostgreSQL / NATS / R2
+(puchi.io.vn)                                  (api.puchi.io.vn)   (Kratos v3)    (K3s + Cloudflare)
 ```
 
 ### Frontend
@@ -49,7 +49,8 @@ User ──► Cloudflare CDN ──► Next.js PWA ──► Envoy Gateway ─�
 | Database | PostgreSQL 18 (CloudNativePG) |
 | Cache | Valkey |
 | Message Queue | NATS (event-driven) |
-| Object Storage | Garage (S3 API, self-host) |
+| Object Storage | Cloudflare R2 (S3 API) + CDN `cdn.puchi.io.vn` |
+| Email | Tino SMTP via notification (`email.send`) |
 | Migration | goose |
 
 ### Cluster
@@ -66,7 +67,7 @@ K3s v1.35.5, ArgoCD GitOps, Traefik ingress, Cloudflare Tunnel.
 
 ## Authentication (Limen)
 
-Auth qua [Limen](https://limenauth.dev/) — thay thế JWT/JWKS custom và Zitadel/Supertokens.
+Auth qua [Limen](https://limenauth.dev/) — opaque session + Bearer (không JWT/JWKS).
 
 ```
 Browser ──► puchi.io.vn (Next.js + limen-auth)
@@ -76,7 +77,7 @@ Browser ──► puchi.io.vn (Next.js + limen-auth)
  │   ├── oauth-google / oauth-facebook / oauth-tiktok
  │   └── session cookie + opaque Bearer
  │
- └─► api.puchi.io.vn/{core,user,...} → Go services
+ └─► api.puchi.io.vn/{v1/profile,v1/social,v1/learn,...} → Go services
      └── pkg/auth introspect → GET /internal/session
 ```
 
@@ -84,35 +85,24 @@ Auth methods: Email/Password + Google + Facebook + TikTok.
 
 ---
 
-## 8 Services
+## 5 Services
 
 | Service | Module | Trách nhiệm |
 |---------|--------|-------------|
 | **auth** | `app/auth/` | Identity (Limen): credential, OAuth, session |
-| **core** | `app/core/` | Profile, onboarding, game stats |
-| **content** | `app/content/` | Courses, units, lessons |
-| **grading** | `app/grading/` | Dictation / listening grading |
-| **user** | `app/user/` | Social features |
-| **game** | `app/game/` | XP, leaderboard |
-| **media** | `app/media/` | Upload (Garage S3) |
-| **notification** | `app/notification/` | Push, email |
+| **core** | `app/core/` | Profile, onboarding, social, stats |
+| **learn** | `app/learn/` | Curriculum, attempts, guest trial, grading |
+| **media** | `app/media/` | Upload (Cloudflare R2) |
+| **notification** | `app/notification/` | Prefs, Gotify push, email.send → Tino SMTP |
 
 ### Event-driven (NATS)
 
 ```
-Auth       ──► "auth.user.created"   ──► Core (sync profile)
-Grading    ──► "lesson.completed"    ──► Core / Notification
-…
+Auth   ──► "auth.user.created"      ──► Core (lazy profile)
+Auth   ──► "email.send"             ──► Notification (Tino SMTP)
+Learn  ──► "learn.lesson.completed" ──► Core (XP / streak)
+Learn  ──► "learn.unit.completed"   ──► Core
 ```
-
----
-
-## Roadmap (tóm tắt)
-
-| Phase | Status | Nội dung |
-|-------|--------|----------|
-| 0 | Done | Auth (Limen) + core foundation |
-| 1+ | In progress | Content, grading, media, social |
 
 ---
 
@@ -122,3 +112,4 @@ Grading    ──► "lesson.completed"    ──► Core / Notification
 |--------|---------|
 | `puchi.io.vn` | Frontend |
 | `api.puchi.io.vn` | API Gateway → Go services + auth |
+| `cdn.puchi.io.vn` | R2 public CDN |
